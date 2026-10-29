@@ -51,7 +51,6 @@ const List<RetroTheme> kThemes = [
 RetroTheme themeById(String id) =>
     kThemes.firstWhere((t) => t.id == id, orElse: () => kThemes.first);
 
-/// Применяет выбранную тему к корпусу и LCD (кнопки и фон остаются прежними).
 class ThemedLcd extends StatelessWidget {
   final Widget child;
 

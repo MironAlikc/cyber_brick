@@ -114,7 +114,6 @@ class GameCubit extends Cubit<GameState> {
 
   // ───────────────────────── Игровой цикл ─────────────────────────
 
-  /// Продолжает сохранённую партию (в паузе) или начинает новую.
   Future<void> startOrResume({
     bool resume = true,
     GameMode mode = GameMode.marathon,
@@ -127,7 +126,10 @@ class GameCubit extends Cubit<GameState> {
     await startGame(mode);
   }
 
-  Future<void> restart() => startGame(state.mode);
+  Future<void> restart() async {
+    if (state.status == GameStatus.initial) return;
+    await startGame(state.mode);
+  }
 
   Future<void> startGame([GameMode? mode]) async {
     final m = mode ?? state.mode;
@@ -136,7 +138,7 @@ class GameCubit extends Cubit<GameState> {
     _pendingClear = null;
     _resetLock();
     _reportedScore = 0;
-    _localDataSource.clearGame();
+    await _localDataSource.clearGame();
 
     final best = await _loadBest(m);
     if (isClosed) return;
@@ -175,6 +177,8 @@ class GameCubit extends Cubit<GameState> {
     _clockTimer?.cancel();
     _clearTimer?.cancel();
     _lockTimer?.cancel();
+    _gameTimer = null;
+    _clockTimer = null;
     _clearTimer = null;
     _lockTimer = null;
   }
@@ -210,27 +214,39 @@ class GameCubit extends Cubit<GameState> {
     }
   }
 
-  void togglePause() {
+  void pause() {
+    if (state.status != GameStatus.playing) return;
     if (state.clearingRows.isNotEmpty) _flushClear();
 
+    _gameTimer?.cancel();
+    _clockTimer?.cancel();
+    _playClock.stop();
+    _cancelLock();
+    emit(state.copyWith(status: GameStatus.paused, elapsedMs: _elapsedMs));
+    saveGame();
+  }
+
+  void resume() {
+    if (state.status != GameStatus.paused) return;
+    emit(state.copyWith(status: GameStatus.playing));
+    _playClock.start();
+    _startTimer();
+    _startClock();
+  }
+
+  void togglePause() {
     if (state.status == GameStatus.playing) {
-      _gameTimer?.cancel();
-      _clockTimer?.cancel();
-      _playClock.stop();
-      _cancelLock();
-      emit(state.copyWith(status: GameStatus.paused, elapsedMs: _elapsedMs));
-      saveGame();
+      pause();
     } else if (state.status == GameStatus.paused) {
-      emit(state.copyWith(status: GameStatus.playing));
-      _playClock.start();
-      _startTimer();
-      _startClock();
+      resume();
     }
   }
 
   /// Вызывается при сворачивании приложения.
   void pauseIfPlaying() {
-    if (state.status == GameStatus.playing) togglePause();
+    if (state.status == GameStatus.playing) {
+      pause();
+    }
   }
 
   /// Завершение партии по условию режима (Sprint — 40 линий, Ultra — время).
@@ -291,7 +307,6 @@ class GameCubit extends Cubit<GameState> {
   Tetromino? _pieceFrom(dynamic data) =>
       data == null ? null : Tetromino.fromJson(data as Map);
 
-  /// Возвращает true, если партия восстановлена (в состоянии паузы).
   Future<bool> _restore(Map<String, dynamic> saved) async {
     try {
       final board = (saved['board'] as List).map((row) {
@@ -379,8 +394,6 @@ class GameCubit extends Cubit<GameState> {
     });
   }
 
-  /// После успешного сдвига/поворота: если фигура снова может падать —
-  /// отменяем фиксацию, если всё ещё на опоре — продлеваем (с лимитом).
   void _onPieceMoved() {
     if (_lockTimer == null) return;
     if (!_grounded) {
@@ -450,9 +463,6 @@ class GameCubit extends Cubit<GameState> {
     );
   }
 
-  /// [soft] = true, когда игрок сам тянет фигуру вниз (+1 очко).
-  /// Если фигура уже на опоре, soft-движение фиксирует её сразу,
-  /// а обычный тик гравитации запускает задержку фиксации.
   void moveDown({bool soft = false}) {
     if (!_isPlaying) return;
 
@@ -541,7 +551,6 @@ class GameCubit extends Cubit<GameState> {
       return;
     }
 
-    // Показываем мигание заполненных линий, потом удаляем их.
     AudioService.instance.play(fullRows.length >= 4 ? Sfx.tetris : Sfx.line);
     emit(
       state.copyWith(
@@ -555,7 +564,6 @@ class GameCubit extends Cubit<GameState> {
     _clearTimer = Timer(clearDuration, _flushClear);
   }
 
-  /// Немедленно завершает анимацию очистки (по таймеру, паузе или выходу).
   void _flushClear() {
     _clearTimer?.cancel();
     _clearTimer = null;
@@ -654,9 +662,7 @@ class GameCubit extends Cubit<GameState> {
 
   @override
   Future<void> close() async {
-    _gameTimer?.cancel();
-    _clockTimer?.cancel();
-    _lockTimer?.cancel();
+    _cancelAllTimers();
     _flushClear();
     await saveGame();
     return super.close();

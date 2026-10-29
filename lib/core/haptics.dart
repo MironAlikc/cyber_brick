@@ -1,6 +1,5 @@
 import 'package:flutter/services.dart';
 
-/// Обёртка над HapticFeedback с глобальным выключателем (настройка VIBRATION).
 class Haptics {
   static bool enabled = true;
 

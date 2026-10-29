@@ -18,8 +18,6 @@ enum Sfx {
   claim,
 }
 
-/// Звуки и музыка. Учитывает настройки SOUND и MUSIC (AppSettings).
-/// Пока `init()` не вызван (например, в тестах), все методы ничего не делают.
 class AudioService {
   AudioService._();
 

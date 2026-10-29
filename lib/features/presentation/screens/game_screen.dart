@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:cyber_brick/core/app_settings.dart';
+import 'package:cyber_brick/core/audio_service.dart';
 import 'package:cyber_brick/core/haptics.dart';
 import 'package:cyber_brick/core/retro_theme.dart';
 import 'package:cyber_brick/core/retro_ui.dart';
@@ -16,26 +17,19 @@ import '../../data/datasources/game_local_data_source.dart';
 import '../cubit/game_cubit.dart';
 import '../cubit/game_state.dart';
 
-/// Вся вёрстка сделана в «дизайн-пикселях» эталонного скриншота 589 × 1280
-/// и масштабируется через FittedBox — на любом экране выглядит одинаково.
 const double _designW = 589;
 const double _designH = 1280;
 
-/// m:ss
 String formatClock(int ms) =>
     '${ms ~/ 60000}:${((ms % 60000) ~/ 1000).toString().padLeft(2, '0')}';
 
-/// m:ss.t
 String formatMs(int ms) {
   final secs = (ms % 60000) / 1000;
   return '${ms ~/ 60000}:${secs.toStringAsFixed(1).padLeft(4, '0')}';
 }
 
 class GameScreen extends StatelessWidget {
-  /// true — продолжить сохранённую партию (если есть), false — новая игра.
   final bool resume;
-
-  /// Режим новой партии (при продолжении берётся из сохранения).
   final GameMode mode;
 
   const GameScreen({
@@ -88,208 +82,414 @@ class _GameView extends StatelessWidget {
           );
       },
       child: BlocConsumer<GameCubit, GameState>(
-        listenWhen: (p, c) =>
-            p.status != c.status &&
-            (c.status == GameStatus.gameOver ||
-                c.status == GameStatus.completed),
+        listenWhen: (p, c) => p.status != c.status,
         listener: (context, state) {
-          Haptics.vibrate();
-          final isOver = state.status == GameStatus.gameOver;
-          final isSprint = state.mode == GameMode.sprint;
-          showDialog(
-            context: context,
-            barrierDismissible: false,
-            builder: (dialogContext) => AlertDialog(
-              backgroundColor: RetroColors.lcd,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(2),
-                side: const BorderSide(color: RetroColors.lcdBorder, width: 2),
-              ),
-              title: Text(
-                isOver ? 'GAME OVER' : (isSprint ? 'COMPLETE' : 'TIME UP'),
-                style: const TextStyle(
-                  fontFamily: kPixelFontFamily,
-                  fontSize: 16,
-                  color: RetroColors.label,
-                ),
-              ),
-              content: Text(
-                (!isOver && isSprint)
-                    ? 'Время: ${formatMs(state.elapsedMs)}'
-                    : 'Ваш результат: ${state.score}',
-                style: const TextStyle(color: RetroColors.label),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () {
-                    Haptics.selection();
-                    Navigator.of(dialogContext).pop();
-                    Navigator.of(context).pop();
-                  },
-                  child: const Text(
-                    'Меню',
-                    style: TextStyle(color: Colors.black),
+          if (state.status == GameStatus.gameOver ||
+              state.status == GameStatus.completed) {
+            Haptics.vibrate();
+          }
+        },
+        builder: (context, state) {
+          final cubit = context.read<GameCubit>();
+
+          return PopScope(
+            canPop: false,
+            onPopInvokedWithResult: (didPop, _) {
+              if (didPop) return;
+              if (state.status == GameStatus.playing) {
+                cubit.pause();
+              } else if (state.status == GameStatus.paused) {
+                cubit.resume();
+              }
+            },
+            child: Stack(
+              children: [
+                const Positioned(
+                  left: 0,
+                  right: 0,
+                  top: 80,
+                  child: Text(
+                    'CYBER BRICK',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 23,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.4,
+                      color: RetroColors.title,
+                      height: 1.1,
+                    ),
                   ),
                 ),
-                TextButton(
-                  onPressed: () {
-                    Haptics.medium();
-                    Navigator.of(dialogContext).pop();
-                    context.read<GameCubit>().restart();
-                  },
-                  child: const Text(
-                    'Заново',
-                    style: TextStyle(
-                      color: Colors.black,
-                      fontWeight: FontWeight.bold,
+                Positioned(
+                  left: 27,
+                  top: 110,
+                  width: 535,
+                  height: 776,
+                  child: ThemedLcd(
+                    child: Container(
+                      padding: const EdgeInsets.all(14),
+                      decoration: const BoxDecoration(
+                        color: RetroColors.frame,
+                        border: Border(
+                          top: BorderSide(
+                            color: RetroColors.frameLight,
+                            width: 3,
+                          ),
+                          left: BorderSide(
+                            color: RetroColors.frameLight,
+                            width: 3,
+                          ),
+                          right: BorderSide(
+                            color: RetroColors.frameDark,
+                            width: 3,
+                          ),
+                          bottom: BorderSide(
+                            color: RetroColors.frameDark,
+                            width: 3,
+                          ),
+                        ),
+                      ),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: RetroColors.lcd,
+                          border: Border.all(
+                            color: RetroColors.lcdBorder,
+                            width: 2,
+                          ),
+                        ),
+                        child: Stack(
+                          children: [
+                            Row(
+                              children: [
+                                _BoardView(state: state, cubit: cubit),
+                                Container(width: 2, color: RetroColors.divider),
+                                Expanded(
+                                  child: _Sidebar(state: state, cubit: cubit),
+                                ),
+                              ],
+                            ),
+                            if (state.status == GameStatus.paused)
+                              const PauseMenu(),
+                            if (state.status == GameStatus.gameOver ||
+                                state.status == GameStatus.completed)
+                              GameOverMenu(state: state),
+                          ],
+                        ),
+                      ),
                     ),
+                  ),
+                ),
+                Positioned(
+                  left: 33,
+                  top: 938,
+                  child: ArcadeButton(
+                    size: 86,
+                    kind: ArcadeKind.yellow,
+                    icon: const ArcadeTriangle(ArcadeDir.left),
+                    repeat: true,
+                    onPressed: cubit.moveLeft,
+                  ),
+                ),
+                Positioned(
+                  left: 193,
+                  top: 938,
+                  child: ArcadeButton(
+                    size: 86,
+                    kind: ArcadeKind.yellow,
+                    icon: const ArcadeTriangle(ArcadeDir.right),
+                    repeat: true,
+                    onPressed: cubit.moveRight,
+                  ),
+                ),
+                Positioned(
+                  left: 113,
+                  top: 1019,
+                  child: ArcadeButton(
+                    size: 86,
+                    kind: ArcadeKind.yellow,
+                    icon: const ArcadeTriangle(ArcadeDir.down),
+                    repeat: true,
+                    onPressed: () => cubit.moveDown(soft: true),
+                  ),
+                ),
+                Positioned(
+                  left: 347,
+                  top: 995,
+                  child: ArcadeButton(
+                    size: 110,
+                    kind: ArcadeKind.blue,
+                    icon: const Icon(
+                      Icons.sync,
+                      size: 70,
+                      color: Color(0xFF1B6598),
+                    ),
+                    onPressed: cubit.rotate,
+                  ),
+                ),
+                Positioned(
+                  left: 468,
+                  top: 937,
+                  child: ArcadeButton(
+                    size: 88,
+                    kind: ArcadeKind.blue,
+                    icon: const Icon(
+                      Icons.keyboard_double_arrow_down,
+                      size: 58,
+                      color: Color(0xFF0B5A8F),
+                    ),
+                    heavy: true,
+                    onPressed: cubit.hardDrop,
                   ),
                 ),
               ],
             ),
           );
         },
-        builder: (context, state) {
-          final cubit = context.read<GameCubit>();
+      ),
+    );
+  }
+}
 
-          return Stack(
-            children: [
-              // Заголовок
-              const Positioned(
-                left: 0,
-                right: 0,
-                top: 80,
-                child: Text(
-                  'BRICK CLASSIC',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 23,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 0.4,
-                    color: RetroColors.title,
-                    height: 1.1,
-                  ),
-                ),
-              ),
+// ═════════════════════════ МЕНЮ ПАУЗЫ И GAME OVER ═════════════════════════
 
-              // Корпус
-              Positioned(
-                left: 27,
-                top: 110,
-                width: 535,
-                height: 776,
-                child: ThemedLcd(
-                  child: Container(
-                    padding: const EdgeInsets.all(14),
-                    decoration: const BoxDecoration(
-                      color: RetroColors.frame,
-                      border: Border(
-                        top: BorderSide(
-                          color: RetroColors.frameLight,
-                          width: 3,
-                        ),
-                        left: BorderSide(
-                          color: RetroColors.frameLight,
-                          width: 3,
-                        ),
-                        right: BorderSide(
-                          color: RetroColors.frameDark,
-                          width: 3,
-                        ),
-                        bottom: BorderSide(
-                          color: RetroColors.frameDark,
-                          width: 3,
-                        ),
-                      ),
-                    ),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: RetroColors.lcd,
-                        border: Border.all(
-                          color: RetroColors.lcdBorder,
-                          width: 2,
-                        ),
-                      ),
-                      child: Row(
-                        children: [
-                          _BoardView(state: state, cubit: cubit),
-                          Container(width: 2, color: RetroColors.divider),
-                          Expanded(
-                            child: _Sidebar(state: state, cubit: cubit),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
+class PauseMenu extends StatelessWidget {
+  const PauseMenu({super.key});
 
-              // Кнопки управления
-              Positioned(
-                left: 33,
-                top: 938,
-                child: ArcadeButton(
-                  size: 86,
-                  kind: ArcadeKind.yellow,
-                  icon: const ArcadeTriangle(ArcadeDir.left),
-                  repeat: true,
-                  onPressed: cubit.moveLeft,
-                ),
+  @override
+  Widget build(BuildContext context) {
+    final cubit = context.read<GameCubit>();
+
+    return Container(
+      color: RetroColors.lcd.withValues(alpha: 0.88),
+      alignment: Alignment.center,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+        decoration: BoxDecoration(
+          color: RetroColors.lcd,
+          border: Border.all(color: RetroColors.lcdBorder, width: 2),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'PAUSE',
+              style: TextStyle(
+                fontFamily: kPixelFontFamily,
+                fontSize: 24,
+                color: RetroColors.label,
+                letterSpacing: 2,
               ),
-              Positioned(
-                left: 193,
-                top: 938,
-                child: ArcadeButton(
-                  size: 86,
-                  kind: ArcadeKind.yellow,
-                  icon: const ArcadeTriangle(ArcadeDir.right),
-                  repeat: true,
-                  onPressed: cubit.moveRight,
-                ),
-              ),
-              Positioned(
-                left: 113,
-                top: 1019,
-                child: ArcadeButton(
-                  size: 86,
-                  kind: ArcadeKind.yellow,
-                  icon: const ArcadeTriangle(ArcadeDir.down),
-                  repeat: true,
-                  onPressed: () => cubit.moveDown(soft: true),
-                ),
-              ),
-              Positioned(
-                left: 347,
-                top: 995,
-                child: ArcadeButton(
-                  size: 110,
-                  kind: ArcadeKind.blue,
-                  icon: const Icon(
-                    Icons.sync,
-                    size: 70,
-                    color: Color(0xFF1B6598),
+            ),
+            const SizedBox(height: 24),
+            RetroMenuButton(
+              label: 'RESUME',
+              onTap: () {
+                Haptics.selection();
+                cubit.resume();
+              },
+            ),
+            const SizedBox(height: 10),
+            RetroMenuButton(
+              label: 'RESTART',
+              onTap: () {
+                Haptics.selection();
+                showDialog(
+                  context: context,
+                  barrierDismissible: false,
+                  builder: (dialogCtx) => RetroDialog(
+                    title: 'RESTART GAME?\nPROGRESS WILL BE LOST',
+                    onConfirm: () {
+                      Navigator.of(dialogCtx).pop();
+                      cubit.restart();
+                    },
                   ),
-                  onPressed: cubit.rotate,
-                ),
-              ),
-              Positioned(
-                left: 468,
-                top: 937,
-                child: ArcadeButton(
-                  size: 88,
-                  kind: ArcadeKind.blue,
-                  icon: const Icon(
-                    Icons.keyboard_double_arrow_down,
-                    size: 58,
-                    color: Color(0xFF0B5A8F),
+                );
+              },
+            ),
+            const SizedBox(height: 10),
+            RetroMenuButton(
+              label: 'QUIT TO MENU',
+              onTap: () {
+                Haptics.selection();
+                showDialog(
+                  context: context,
+                  barrierDismissible: false,
+                  builder: (dialogCtx) => RetroDialog(
+                    title: 'QUIT TO MENU?\nPROGRESS WILL BE LOST',
+                    onConfirm: () {
+                      Navigator.of(dialogCtx).pop();
+                      Navigator.of(context).pop();
+                    },
                   ),
-                  heavy: true,
-                  onPressed: cubit.hardDrop,
-                ),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class GameOverMenu extends StatelessWidget {
+  final GameState state;
+
+  const GameOverMenu({super.key, required this.state});
+
+  @override
+  Widget build(BuildContext context) {
+    final cubit = context.read<GameCubit>();
+    final isOver = state.status == GameStatus.gameOver;
+    final isSprint = state.mode == GameMode.sprint;
+
+    return Container(
+      color: RetroColors.lcd.withValues(alpha: 0.92),
+      alignment: Alignment.center,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+        decoration: BoxDecoration(
+          color: RetroColors.lcd,
+          border: Border.all(color: RetroColors.lcdBorder, width: 2),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              isOver ? 'GAME OVER' : (isSprint ? 'COMPLETE' : 'TIME UP'),
+              style: const TextStyle(
+                fontFamily: kPixelFontFamily,
+                fontSize: 22,
+                color: RetroColors.label,
+                letterSpacing: 1,
               ),
-            ],
-          );
-        },
+            ),
+            const SizedBox(height: 12),
+            Text(
+              (!isOver && isSprint)
+                  ? 'TIME: ${formatMs(state.elapsedMs)}'
+                  : 'SCORE: ${state.score}',
+              style: const TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: RetroColors.value,
+              ),
+            ),
+            const SizedBox(height: 24),
+            RetroMenuButton(
+              label: 'PLAY AGAIN',
+              onTap: () {
+                Haptics.medium();
+                cubit.restart();
+              },
+            ),
+            const SizedBox(height: 10),
+            RetroMenuButton(
+              label: 'MAIN MENU',
+              onTap: () {
+                Haptics.selection();
+                Navigator.of(context).pop();
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class RetroMenuButton extends StatelessWidget {
+  final String label;
+  final VoidCallback onTap;
+
+  const RetroMenuButton({super.key, required this.label, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () {
+        AudioService.instance.play(Sfx.click);
+        onTap();
+      },
+      child: Container(
+        width: 240,
+        height: 46,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: RetroColors.darkButton,
+          border: Border.all(color: RetroColors.lcdBorder, width: 1.5),
+        ),
+        child: Text(
+          label,
+          style: const TextStyle(
+            fontFamily: kPixelFontFamily,
+            fontSize: 14,
+            fontWeight: FontWeight.w700,
+            color: RetroColors.darkButtonText,
+            letterSpacing: 1,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class RetroDialog extends StatelessWidget {
+  final String title;
+  final VoidCallback onConfirm;
+
+  const RetroDialog({super.key, required this.title, required this.onConfirm});
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: RetroColors.lcd,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.zero,
+        side: const BorderSide(color: RetroColors.lcdBorder, width: 2),
+      ),
+      content: SizedBox(
+        width: 280,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              title,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontFamily: kPixelFontFamily,
+                fontSize: 13,
+                height: 1.4,
+                color: RetroColors.label,
+              ),
+            ),
+            const SizedBox(height: 24),
+            Row(
+              children: [
+                Expanded(
+                  child: RetroMenuButton(
+                    label: 'YES',
+                    onTap: () {
+                      Haptics.heavy();
+                      onConfirm();
+                    },
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: RetroMenuButton(
+                    label: 'NO',
+                    onTap: () {
+                      Haptics.selection();
+                      Navigator.of(context).pop();
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -318,7 +518,6 @@ class _BoardViewState extends State<_BoardView> with TickerProviderStateMixin {
   final Stopwatch _clock = Stopwatch()..start();
   final ValueNotifier<int> _tick = ValueNotifier<int>(0);
 
-  /// Момент, когда клетка «погасла» (для послесвечения).
   final List<List<Duration?>> _glowAt = List.generate(
     GameCubit.rows,
     (_) => List<Duration?>.filled(GameCubit.cols, null),
@@ -406,15 +605,16 @@ class _BoardViewState extends State<_BoardView> with TickerProviderStateMixin {
   Widget build(BuildContext context) {
     final state = widget.state;
 
-    return _BoardGestures(
-      cubit: widget.cubit,
-      child: SizedBox(
-        width: 372,
-        height: 744,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            CustomPaint(
+    // Ширина левой панели под игровое поле закреплена на уровне ~372 пикселей.
+    // Обертываем в AspectRatio, чтобы ячейки оставались идеально квадратными (10 колонок на 20 строк).
+    return SizedBox(
+      width: 372,
+      child: _BoardGestures(
+        cubit: widget.cubit,
+        child: Center(
+          child: AspectRatio(
+            aspectRatio: GameCubit.cols / GameCubit.rows,
+            child: CustomPaint(
               painter: _BoardPainter(
                 board: state.board,
                 piece: state.currentPiece?.positions ?? const [],
@@ -426,20 +626,7 @@ class _BoardViewState extends State<_BoardView> with TickerProviderStateMixin {
                 repaint: Listenable.merge([_flash, _tick]),
               ),
             ),
-            if (state.status == GameStatus.paused)
-              Container(
-                color: Colors.black12,
-                alignment: Alignment.center,
-                child: const Text(
-                  'PAUSE',
-                  style: TextStyle(
-                    fontFamily: kPixelFontFamily,
-                    fontSize: 26,
-                    color: RetroColors.label,
-                  ),
-                ),
-              ),
-          ],
+          ),
         ),
       ),
     );
@@ -471,7 +658,6 @@ class _BoardPainter extends CustomPainter {
     final cell = size.width / GameCubit.cols;
     final now = clock.elapsed;
 
-    // 6 фаз за время очистки: заполнено → пусто → … → пусто (3 мигания).
     final hideClearing =
         clearingRows.isNotEmpty && (flash.value * 6).floor().isOdd;
 
@@ -525,7 +711,6 @@ class _BoardPainter extends CustomPainter {
   bool shouldRepaint(covariant _BoardPainter old) => true;
 }
 
-/// Мини-превью фигуры (NEXT / HOLD / декоративная L).
 class _PiecePainter extends CustomPainter {
   final List<Position> cells;
   final double cell;
@@ -582,7 +767,6 @@ class _Sidebar extends StatelessWidget {
     Position(1, 2),
   ];
 
-  /// Четыре верхние плитки зависят от режима. В Marathon — как на референсе.
   List<Widget> _tiles(GameState s) {
     final speed = _StatTile('SPEED', '${s.level}');
     final score = _StatTile('SCORE', '${s.score}');
@@ -621,7 +805,6 @@ class _Sidebar extends StatelessWidget {
       children: [
         const SizedBox(height: 6),
         ..._tiles(state),
-
         const SizedBox(height: 8),
         const _Label('NEXT'),
         const SizedBox(height: 3),
@@ -640,6 +823,7 @@ class _Sidebar extends StatelessWidget {
         GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: () {
+            if (state.status != GameStatus.playing) return;
             Haptics.medium();
             cubit.holdPiece();
           },
@@ -663,28 +847,66 @@ class _Sidebar extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 15),
-        GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: () {
-            Haptics.selection();
-            cubit.togglePause();
+        BlocSelector<GameCubit, GameState, GameStatus>(
+          selector: (s) => s.status,
+          builder: (context, status) {
+            return GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () {
+                Haptics.selection();
+                if (status == GameStatus.playing) {
+                  cubit.pause();
+                } else if (status == GameStatus.paused) {
+                  cubit.resume();
+                } else if (status == GameStatus.gameOver ||
+                    status == GameStatus.completed) {
+                  cubit.restart();
+                }
+              },
+              child: Container(
+                width: 93,
+                height: 37,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  border: Border.all(color: RetroColors.lcdBorder, width: 2),
+                ),
+                child: PauseButtonIcon(status: status),
+              ),
+            );
           },
-          child: Container(
-            width: 93,
-            height: 37,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              border: Border.all(color: RetroColors.lcdBorder, width: 2),
-            ),
-            child: const _PauseIcon(),
-          ),
         ),
       ],
     );
   }
 }
 
-/// Блок «заголовок + значение» высотой 79 с линией снизу.
+class PauseButtonIcon extends StatelessWidget {
+  final GameStatus status;
+
+  const PauseButtonIcon({super.key, required this.status});
+
+  @override
+  Widget build(BuildContext context) {
+    if (status == GameStatus.paused) {
+      return const Icon(
+        Icons.play_arrow,
+        size: 24,
+        color: RetroColors.lcdBorder,
+      );
+    } else if (status == GameStatus.gameOver ||
+        status == GameStatus.completed) {
+      return const Icon(Icons.refresh, size: 22, color: RetroColors.lcdBorder);
+    }
+    // По умолчанию (playing) — значок паузы II
+    Widget bar() =>
+        Container(width: 4, height: 20, color: RetroColors.lcdBorder);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [bar(), const SizedBox(width: 7), bar()],
+    );
+  }
+}
+
 class _StatTile extends StatelessWidget {
   final String title;
   final String value;
@@ -769,25 +991,8 @@ class _PreviewBox extends StatelessWidget {
   }
 }
 
-class _PauseIcon extends StatelessWidget {
-  const _PauseIcon();
-
-  @override
-  Widget build(BuildContext context) {
-    Widget bar() =>
-        Container(width: 4, height: 20, color: RetroColors.lcdBorder);
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [bar(), const SizedBox(width: 7), bar()],
-    );
-  }
-}
-
 // ═════════════════════════ ЖЕСТЫ И ЖИЗНЕННЫЙ ЦИКЛ ═════════════════════════
 
-/// Управление свайпами по полю:
-/// влево/вправо — сдвиг, вниз — мягкое падение, быстрый свайп вверх —
-/// мгновенное падение, тап — поворот.
 class _BoardGestures extends StatefulWidget {
   final GameCubit cubit;
   final Widget child;
@@ -799,13 +1004,14 @@ class _BoardGestures extends StatefulWidget {
 }
 
 class _BoardGesturesState extends State<_BoardGestures> {
-  static const double _step = 34; // дизайн-пикселей на один шаг
+  static const double _step = 34;
   static const double _flingSpeed = 900;
 
   double _ax = 0;
   double _ay = 0;
 
   void _onUpdate(DragUpdateDetails d) {
+    if (widget.cubit.state.status != GameStatus.playing) return;
     _ax += d.delta.dx;
     _ay += d.delta.dy;
 
@@ -827,6 +1033,7 @@ class _BoardGesturesState extends State<_BoardGestures> {
   }
 
   void _onEnd(DragEndDetails d) {
+    if (widget.cubit.state.status != GameStatus.playing) return;
     final v = d.velocity.pixelsPerSecond;
     if (v.dy < -_flingSpeed && v.dy.abs() > v.dx.abs()) {
       Haptics.heavy();
@@ -843,6 +1050,7 @@ class _BoardGesturesState extends State<_BoardGestures> {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: () {
+        if (widget.cubit.state.status != GameStatus.playing) return;
         Haptics.selection();
         widget.cubit.rotate();
       },
@@ -857,7 +1065,6 @@ class _BoardGesturesState extends State<_BoardGestures> {
   }
 }
 
-/// Ставит игру на паузу и сохраняет партию, когда приложение уходит в фон.
 class _LifecyclePause extends StatefulWidget {
   final Widget child;
 

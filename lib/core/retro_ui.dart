@@ -5,15 +5,9 @@ import 'package:flutter/material.dart';
 import 'haptics.dart';
 import 'retro_theme.dart';
 
-/// Размер «дизайн-холста» (эталонный скриншот).
 const double kDesignW = 589;
 const double kDesignH = 1280;
-
-/// Имя семейства «цифрового» LCD-шрифта (см. pubspec.yaml).
-/// Если шрифт не подключён — используется monospace.
 const String kLcdFontFamily = 'LcdFont';
-
-/// Пиксельный шрифт для заголовков (PressStart2P).
 const String kPixelFontFamily = 'PressStart2P';
 
 class RetroColors {
@@ -495,9 +489,6 @@ class _CrossPainter extends CustomPainter {
 
 enum LcdCell { empty, filled, ghost }
 
-/// Рисует одну LCD-клетку. Все размеры — доли от стороны клетки,
-/// поэтому подходит и для поля, и для мини-превью, и для заставки.
-/// [alpha] < 1 — полупрозрачная «послесвечение»-клетка.
 void paintLcdCell(Canvas canvas, Rect rect, LcdCell style, {double alpha = 1}) {
   final s = rect.width;
 
