@@ -1,0 +1,2 @@
+-keep class com.mironyuk.cyber_brick.MainActivity { * }
+-keep class * extends io.flutter.embedding.android.FlutterActivity { * }
